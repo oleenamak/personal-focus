@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-// Personal Focus: a small transparent desktop window that hosts the typewriter UI.
+// Personal Focus: a small transparent desktop window (a folder and today's note) hosted in a web view.
 // All logic lives in Sources/Core. This file only wires the window, the web view and the menu.
 //
 // Launch options (used for testing so the real log and recovery file are never touched):
@@ -20,6 +20,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var engine: Engine!
     var timer: Timer?
     var e2eDir: URL?
+    var statusItem: NSStatusItem?
 
     func arg(_ name: String) -> String? {
         let a = CommandLine.arguments
@@ -37,8 +38,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         engine = Engine(clock: SystemClock(), stateURL: stateDir.appendingPathComponent("state.json"), defaultFolder: logDir)
         if arg("--log-dir") != nil { engine.setLogFolder(logDir) }
 
+        NSApp.applicationIconImage = appIcon()
         buildMenu()
         buildWindow()
+        buildStatusItem()
         flush()
 
         let ws = NSWorkspace.shared.notificationCenter
@@ -49,6 +52,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             guard let self = self else { return }
             self.engine.tick()
             if self.engine.hasActive { self.push() }
+            self.updateStatusItem()
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -56,9 +60,59 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func flush() { engine.flush(); push() }
 
     func applicationWillTerminate(_ notification: Notification) { engine.appWillQuit() }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Closing the window only hides it. The timer keeps running until the app is quit.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        window.makeKeyAndOrderFront(nil); return true
+        showWindow(); return true
+    }
+
+    @objc func showWindow() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func hideWindow() { window.orderOut(nil) }
+
+    @objc func toggleWindow() { window.isVisible ? hideWindow() : showWindow() }
+
+    // MARK: Menu bar timer
+
+    func buildStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.target = self
+        item.button?.action = #selector(toggleWindow)
+        item.button?.toolTip = "Personal Focus"
+        statusItem = item
+        updateStatusItem()
+    }
+
+    func updateStatusItem() {
+        guard let b = statusItem?.button else { return }
+        if engine.hasActive {
+            let secs = Int(engine.activeSeconds().rounded())
+            b.image = NSImage(systemSymbolName: engine.isRunning ? "clock" : "pause.circle", accessibilityDescription: "Timer")
+            b.title = " " + clockString(secs)
+            b.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            b.imagePosition = .imageLeft
+        } else {
+            b.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Personal Focus")
+            b.title = ""
+        }
+    }
+
+    func appIcon() -> NSImage {
+        NSImage(size: NSSize(width: 512, height: 512), flipped: false) { r in
+            let back = NSBezierPath(roundedRect: NSRect(x: 56, y: 92, width: 400, height: 300), xRadius: 40, yRadius: 40)
+            NSColor(calibratedRed: 0.18, green: 0.56, blue: 0.88, alpha: 1).setFill(); back.fill()
+            NSColor.white.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 96, y: 150, width: 320, height: 210), xRadius: 22, yRadius: 22).fill()
+            NSColor(calibratedRed: 0.98, green: 0.78, blue: 0.46, alpha: 1).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 96, y: 310, width: 320, height: 50), xRadius: 22, yRadius: 22).fill()
+            let front = NSBezierPath(roundedRect: NSRect(x: 56, y: 72, width: 400, height: 190), xRadius: 40, yRadius: 40)
+            NSGradient(starting: NSColor(calibratedRed: 0.55, green: 0.80, blue: 0.99, alpha: 1),
+                       ending: NSColor(calibratedRed: 0.16, green: 0.56, blue: 0.90, alpha: 1))?.draw(in: front, angle: -90)
+            return true
+        }
     }
 
     // MARK: Window
@@ -71,19 +125,19 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         web.underPageBackgroundColor = .clear
         web.navigationDelegate = self
 
-        window = FocusWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
-                             styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+        window = FocusWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 360),
+                             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 440, height: 460)
         window.contentView = web
         if arg("--e2e") != nil {
-            window.setFrame(NSRect(x: 80, y: 80, width: 520, height: 700), display: true)     // scripted runs never save the frame
+            window.setFrame(NSRect(x: 80, y: 80, width: 340, height: 360), display: true)     // scripted runs never save the frame
         } else {
-            window.setFrameAutosaveName("PersonalFocusWindow")
-            if !window.setFrameUsingName("PersonalFocusWindow") { window.center() }
+            window.setFrameAutosaveName("PersonalFocusFolder")
+            if !window.setFrameUsingName("PersonalFocusFolder") { window.center() }
+            var f = window.frame; f.size = NSSize(width: 340, height: 360); window.setFrame(f, display: true)   // fixed size
         }
         window.makeKeyAndOrderFront(nil)
 
@@ -97,6 +151,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu(); appItem.submenu = appMenu
+        let close = appMenu.addItem(withTitle: "Close Window", action: #selector(hideWindow), keyEquivalent: "w")
+        close.target = self
         appMenu.addItem(withTitle: "Quit Personal Focus", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let editItem = NSMenuItem(); main.addItem(editItem)
         let edit = NSMenu(title: "Edit"); editItem.submenu = edit
@@ -135,13 +191,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             f.origin.y -= CGFloat((m["dy"] as? Double) ?? 0)      // screen y grows downward, Cocoa's grows upward
             window.setFrame(f, display: true)
             return
-        case "resizeBy":
-            let f = window.frame
-            let room = (window.screen ?? NSScreen.main)?.visibleFrame.size ?? NSSize(width: 4000, height: 4000)
-            let w = min(max(f.width + CGFloat((m["dw"] as? Double) ?? 0), window.minSize.width), room.width)
-            let h = min(max(f.height + CGFloat((m["dh"] as? Double) ?? 0), window.minSize.height), room.height)
-            window.setFrame(NSRect(x: f.minX, y: f.maxY - h, width: w, height: h), display: true)   // keep the top-left corner fixed
-            return
+        case "hide": hideWindow(); return
         case "frame":
             FileHandle.standardError.write(Data("[frame] \(Int(window.frame.minX)),\(Int(window.frame.minY)) \(Int(window.frame.width))x\(Int(window.frame.height))\n".utf8))
             return
@@ -183,22 +233,25 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func runE2E(_ dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         func addTask(_ t: String) -> String {
-            "(function(){var i=document.getElementById('inp');i.value=\(jsString(t));i.dispatchEvent(new Event('input'));i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))})()"
+            "(function(){var i=document.getElementById('newt');i.value=\(jsString(t));i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))})()"
         }
+        let drag = "var f=function(t,x,y){var e=new MouseEvent(t,{screenX:x,screenY:y,bubbles:true});(t==='mousedown'?document.getElementById('%@'):window).dispatchEvent(e)};f('mousedown',500,500);f('mousemove',560,470);f('mousemove',620,440);f('mouseup',620,440)"
         let steps: [(Double, String)] = [
-            (0.0, addTask("Outline this week's article")),
+            (0.0, "SNAP:e2e-0-folder"),
+            (0.1, "document.getElementById('art').click()"),
+            (0.7, addTask("Outline this week's article")),
             (0.5, addTask("Apply to 3 companies")),
             (0.5, addTask("Interview prep")),
-            (1.2, "document.querySelectorAll('.line .play')[0].click()"),
-            (2.4, "document.getElementById('pause').click()"),
-            (1.2, "document.getElementById('pause').click()"),
+            (1.2, "document.querySelectorAll('[data-act=start]')[0].click()"),
+            (2.4, "document.querySelector('[data-act=pp]').click()"),
+            (1.2, "document.querySelector('[data-act=pp]').click()"),
             (1.2, "SNAP:e2e-1-running"),
-            (0.3, "document.getElementById('stop').click()"),
-            (0.6, "var l=document.querySelectorAll('.line')[1];var c=l.querySelector('.chk');c.checked=true;c.dispatchEvent(new Event('change'));l.querySelector('.note').value='Sent 3 applications';l.querySelector('.wt').value='Independent work'"),
-            (0.1, "PRINT:(function(){var l=document.querySelectorAll('.line')[1];var s=l.querySelector('.slip');var cs=getComputedStyle(l);return l.className+' lineH='+l.offsetHeight+' slipH='+s.offsetHeight+' maxH='+cs.maxHeight+' trans='+cs.transitionProperty+'/'+cs.transitionDuration+' vis='+document.visibilityState+' rules='+Array.from(document.styleSheets[0].cssRules).filter(function(r){return r.selectorText&&r.selectorText.indexOf('.open')>-1}).map(function(r){return r.cssText}).join('|')})()"),
-            (0.6, "SNAP:e2e-2-completing"),
-            (0.2, "document.querySelectorAll('.line')[1].querySelector('.ok').click()"),
-            (0.4, "document.getElementById('retro').click()"),
+            (0.2, "document.querySelector('[data-act=stop]').click()"),
+            (0.6, "document.querySelectorAll('[data-act=comp]')[1].click()"),
+            (0.4, "document.getElementById('cn').value='Sent 3 applications';document.getElementById('cy').value='Independent work'"),
+            (0.5, "SNAP:e2e-2-completing"),
+            (0.2, "document.querySelector('[data-act=done]').click()"),
+            (0.4, "document.getElementById('retrob').click()"),
             (0.3, "document.getElementById('rt').value='Booked hair appointment';document.getElementById('rm').value='12';document.getElementById('rn').value='Quick one'"),
             (0.5, "SNAP:e2e-3-retro-form"),
             (0.1, "document.getElementById('rm').value='abc';document.getElementById('rgo').click()"),
@@ -206,12 +259,22 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             (0.1, "document.getElementById('rm').value='12';document.getElementById('rgo').click()"),
             (1.8, "SNAP:e2e-4-after"),
             (0.1, "FRAME"),
-            (0.1, "var f=function(t,x,y){var e=new MouseEvent(t,{screenX:x,screenY:y,bubbles:true});(t==='mousedown'?document.getElementById('tw'):window).dispatchEvent(e)};f('mousedown',500,500);f('mousemove',560,470);f('mousemove',620,440);f('mouseup',620,440)"),
+            (0.1, String(format: drag, "nh")),
             (0.3, "FRAME"),
-            (0.1, "var g=function(t,x,y){var e=new MouseEvent(t,{screenX:x,screenY:y,bubbles:true});(t==='mousedown'?document.getElementById('grip'):window).dispatchEvent(e)};g('mousedown',900,900);g('mousemove',960,940);g('mouseup',960,940)"),
+            (0.1, "PRINT:'open after header drag = ' + document.getElementById('win').classList.contains('o')"),
+            (0.1, "document.getElementById('collapse').click()"),
+            (0.7, "PRINT:'closed = ' + !document.getElementById('win').classList.contains('o')"),
+            (0.1, String(format: drag, "art")),
             (0.3, "FRAME"),
-            (0.1, "var h=function(t,x,y){var e=new MouseEvent(t,{screenX:x,screenY:y,bubbles:true});(t==='mousedown'?document.getElementById('grip'):window).dispatchEvent(e)};h('mousedown',900,900);h('mousemove',100,100);h('mouseup',100,100)"),
-            (0.3, "FRAME"),
+            (0.1, "PRINT:'open after folder drag (should stay closed) = ' + document.getElementById('win').classList.contains('o')"),
+            (0.3, "SNAP:e2e-5-closed-running-none"),
+            (0.1, "document.querySelectorAll('[data-act=start]')[0].click()"),
+            (1.3, "STATUS"),
+            (0.1, "HIDE"),
+            (2.2, "STATUS"),
+            (0.1, "SHOW"),
+            (0.4, "STATUS"),
+            (0.1, "document.querySelector('[data-act=stop]').click()"),
             (0.4, "DONE"),
         ]
         func run(_ i: Int) {
@@ -221,6 +284,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 let a = self.engine.snapshot()["active"]
                 FileHandle.standardError.write(Data("[e2e \(i) t=\(String(format: "%.2f", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1000))) active=\(a ?? "nil")] \(js.prefix(60))\n".utf8))
                 if js == "FRAME" { self.web.evaluateJavaScript("window.webkit.messageHandlers.pf.postMessage({cmd:'frame'})") { _, _ in run(i + 1) }; return }
+                if js == "HIDE" { self.hideWindow(); FileHandle.standardError.write(Data("[hide] visible=\(self.window.isVisible) timerActive=\(self.engine.hasActive) status=\(self.statusItem?.button?.title ?? "nil")\n".utf8)); run(i + 1); return }
+                if js == "STATUS" { FileHandle.standardError.write(Data("[status] window.visible=\(self.window.isVisible) timerSeconds=\(Int(self.engine.activeSeconds().rounded())) menubar=\"\(self.statusItem?.button?.title ?? "nil")\"\n".utf8)); run(i + 1); return }
+                if js == "SHOW" { self.showWindow(); FileHandle.standardError.write(Data("[show] visible=\(self.window.isVisible)\n".utf8)); run(i + 1); return }
                 if js == "DONE" { self.engine.appWillQuit(); NSApp.terminate(nil); return }
                 if js.hasPrefix("PRINT:") {
                     self.web.evaluateJavaScript(String(js.dropFirst(6))) { r, e in

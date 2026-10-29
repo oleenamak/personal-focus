@@ -37,6 +37,13 @@ struct ActiveRecord: Codable {
     var checkpointWall: Date
 }
 
+struct DoneItem: Codable, Equatable {
+    var date: String              // yyyy-MM-dd, America/Chicago
+    var text: String
+    var seconds: Int
+    var note: String?
+}
+
 struct Persisted: Codable {
     var version = 1
     var tasks: [TaskItem] = []
@@ -45,6 +52,7 @@ struct Persisted: Codable {
     var logFolder: String?
     var recentOps: [String] = []
     var lastSavedAt: Date?
+    var done: [DoneItem]?         // tasks finished today, shown on the note; older days drop off
 }
 
 enum EngineError: Error, LocalizedError {

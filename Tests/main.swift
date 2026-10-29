@@ -358,6 +358,22 @@ do {
     check(Chicago.iso(Chicago.make(2026, 10, 28, 10, 0, 0)).hasSuffix("-05:00"), "offset is -05:00 before DST ends")
 }
 
+// 10. The "done today" list on the note
+group("10. Done today list")
+do {
+    let e = makeEnv("t10"); let en = e.engine
+    func doneTexts(_ x: Engine) -> [String] { (x.snapshot()["done"] as! [[String: Any]]).map { $0["text"] as! String } }
+    let t = try! en.addTask("Write brief")
+    try! en.start(t.id); e.clock.advance(90); try! en.complete(t.id, note: "Shipped", workType: nil)
+    let first = (en.snapshot()["done"] as! [[String: Any]]).first
+    check(doneTexts(en) == ["Write brief"] && first?["seconds"] as? Int == 90 && first?["note"] as? String == "Shipped", "a finished task shows with its time and note")
+    try! en.logFinished(text: "Earlier call", date: "2026-10-28", minutes: "5", note: nil, workType: nil, opId: nil)
+    try! en.logFinished(text: "Yesterday's thing", date: "2026-10-27", minutes: "5", note: nil, workType: nil, opId: nil)
+    check(doneTexts(en) == ["Write brief", "Earlier call"], "a finished-task entry for today shows; one for another day does not")
+    check(doneTexts(restart(e)) == ["Write brief", "Earlier call"], "the list survives a restart")
+    check(doneTexts(restart(e, advanceWall: 24 * 3600)).isEmpty, "the list is empty the next day")
+}
+
 print("\n\(passed) passed, \(failed) failed")
 try? FileManager.default.removeItem(at: root)
 exit(failed == 0 ? 0 : 1)

@@ -17,6 +17,7 @@ final class Engine {
     private(set) var tasks: [TaskItem] = []
     private var active: Active?
     private(set) var pending: [Event] = []
+    private(set) var done: [DoneItem] = []
     private(set) var logFolder: URL
     private(set) var lastError: String?
     private(set) var lastSavedAt: Date?
@@ -53,6 +54,7 @@ final class Engine {
         pending = p.pending
         recentOps = p.recentOps
         lastSavedAt = p.lastSavedAt
+        done = p.done ?? []
         if let f = p.logFolder, !f.isEmpty { logFolder = URL(fileURLWithPath: f) }
         if let a = p.active {
             active = Active(taskId: a.taskId, startedWall: a.startedWall, accumulated: a.accumulated, runningSince: nil)
@@ -73,8 +75,10 @@ final class Engine {
             rec = ActiveRecord(taskId: a.taskId, startedWall: a.startedWall, accumulated: activeSeconds(),
                                running: a.runningSince != nil, checkpointWall: clock.wall)
         }
+        let today = Chicago.dateString(clock.wall)
+        done.removeAll { $0.date < today }
         let p = Persisted(tasks: tasks, active: rec, pending: pending, logFolder: logFolder.path,
-                          recentOps: recentOps, lastSavedAt: lastSavedAt)
+                          recentOps: recentOps, lastSavedAt: lastSavedAt, done: done)
         do {
             try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder.pf.encode(p).write(to: stateURL, options: .atomic)
@@ -177,6 +181,7 @@ final class Engine {
                        startedAt: nil, endedAt: nil, taskText: tasks[idx].text, activeSeconds: 0,
                        timeSource: .measured, complete: true, workType: type, note: note)
         }
+        done.append(DoneItem(date: ev.workDate, text: tasks[idx].text, seconds: tasks[idx].totalSeconds, note: note))
         tasks.removeAll { $0.id == taskId }
         pending.append(ev)
         persist()
@@ -208,6 +213,7 @@ final class Engine {
                        recordedAt: Chicago.iso(now), startedAt: nil, endedAt: nil, taskText: text,
                        activeSeconds: secs, timeSource: secs == nil ? .unknown : .estimated,
                        complete: true, workType: type, note: clean(rawNote))
+        done.append(DoneItem(date: day, text: text, seconds: secs ?? 0, note: clean(rawNote)))
         if let op = opId { recentOps.append(op); if recentOps.count > 50 { recentOps.removeFirst() } }
         pending.append(ev)
         persist()
@@ -281,6 +287,8 @@ final class Engine {
         let now = clock.wall
         return [
             "tasks": taskRows,
+            "done": done.filter { $0.date == Chicago.dateString(now) }
+                .map { ["text": $0.text, "seconds": $0.seconds, "note": $0.note ?? ""] as [String: Any] },
             "active": activeObj,
             "pending": pending.count,
             "error": lastError ?? NSNull(),
